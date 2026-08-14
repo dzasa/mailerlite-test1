@@ -1,0 +1,124 @@
+services:
+    laravel.test:
+        build: &sail-build
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        extra_hosts: &sail-extra-hosts
+            - 'host.docker.internal:host-gateway'
+        ports:
+            - '${APP_PORT:-80}:80'
+        environment: &sail-environment
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+            XDEBUG_MODE: '${SAIL_XDEBUG_MODE:-off}'
+            XDEBUG_CONFIG: '${SAIL_XDEBUG_CONFIG:-client_host=host.docker.internal}'
+            IGNITION_LOCAL_SITES_PATH: '${PWD}'
+            # Pest browser tests drive Chromium through Playwright. Pinning the
+            # download path to a mounted volume keeps the ~400MB of browser
+            # binaries out of the container layer and alive across recreates.
+            PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+            # `artisan serve` wraps PHP's built-in server, which handles one
+            # request at a time unless it is told to fork workers. Without this
+            # the stack has a concurrency ceiling of 1 and any load measurement
+            # is really measuring a queue of one.
+            PHP_CLI_SERVER_WORKERS: '${PHP_CLI_SERVER_WORKERS:-8}'
+        volumes: &sail-volumes
+            - '.:/var/www/html'
+            - 'sail-playwright:/ms-playwright'
+        networks: &sail-networks
+            - sail
+        depends_on: &sail-healthy-dependencies
+            mysql:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+    queue:
+        build: *sail-build
+        image: 'sail-8.5/app'
+        extra_hosts: *sail-extra-hosts
+        command: php artisan queue:work --tries=3 --backoff=5
+        restart: unless-stopped
+        environment: *sail-environment
+        volumes: *sail-volumes
+        networks: *sail-networks
+        depends_on: *sail-healthy-dependencies
+    # Vite runs in the container so nothing needs npm on the host. node_modules is
+    # a container-owned volume that masks the bind mount: the host's darwin-arm64
+    # binaries are invisible here, and npm installs linux-aarch64 ones instead.
+    # Uses the Sail image because the Wayfinder plugin shells out to php artisan,
+    # so this container needs both Node and PHP.
+    vite:
+        build: *sail-build
+        image: 'sail-8.5/app'
+        extra_hosts: *sail-extra-hosts
+        # The named volume is created root-owned while Sail's entrypoint drops to
+        # the sail user, so chown it as root first, then run npm as sail. Keeping
+        # npm as uid 1000 means files it writes into the bind mount (public/hot,
+        # public/build) stay owned by the host user rather than root.
+        command: sh -c "chown -R sail:sail /var/www/html/node_modules && exec gosu sail sh -c 'npm install && npm run dev'"
+        restart: unless-stopped
+        ports:
+            - '${VITE_PORT:-5173}:${VITE_PORT:-5173}'
+        environment:
+            <<: *sail-environment
+            SUPERVISOR_PHP_USER: root
+        volumes:
+            - '.:/var/www/html'
+            - 'sail-node-modules:/var/www/html/node_modules'
+        networks: *sail-networks
+    mysql:
+        image: 'mysql:8.4'
+        ports:
+            - '${FORWARD_DB_PORT:-3306}:3306'
+        environment:
+            MYSQL_ROOT_PASSWORD: '${DB_PASSWORD}'
+            MYSQL_ROOT_HOST: '%'
+            MYSQL_DATABASE: '${DB_DATABASE}'
+            MYSQL_USER: '${DB_USERNAME}'
+            MYSQL_PASSWORD: '${DB_PASSWORD}'
+            MYSQL_ALLOW_EMPTY_PASSWORD: 1
+            MYSQL_EXTRA_OPTIONS: '${MYSQL_EXTRA_OPTIONS:-}'
+        volumes:
+            - 'sail-mysql:/var/lib/mysql'
+            - './vendor/laravel/sail/database/mysql/create-testing-database.sh:/docker-entrypoint-initdb.d/10-create-testing-database.sh'
+        networks:
+            - sail
+        healthcheck:
+            test:
+                - CMD
+                - mysqladmin
+                - ping
+                - '-p${DB_PASSWORD}'
+            retries: 3
+            timeout: 5s
+    redis:
+        image: 'redis:alpine'
+        command: redis-server --appendonly yes --maxmemory-policy noeviction
+        ports:
+            - '6379:6379'
+        volumes:
+            - 'sail-redis:/data'
+        networks:
+            - sail
+        healthcheck:
+            test:
+                - CMD
+                - redis-cli
+                - ping
+            retries: 3
+            timeout: 5s
+networks:
+    sail:
+        driver: bridge
+volumes:
+    sail-mysql:
+        driver: local
+    sail-redis:
+        driver: local
+    sail-node-modules:
+        driver: local
+    sail-playwright:
+        driver: local
