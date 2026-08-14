@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { Head, useHttp } from '@inertiajs/vue3';
 import { computed, ref } from 'vue';
+import SubscriberController from '@/actions/App/Http/Controllers/Api/V1/SubscriberController';
 import InputError from '@/components/InputError.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Spinner } from '@/components/ui/spinner';
-import SubscriberController from '@/actions/App/Http/Controllers/Api/V1/SubscriberController';
 
 type SubscriberStatus = 'subscribed' | 'unsubscribed';
 
@@ -18,14 +18,10 @@ type SubscriberForm = {
 const successMessage = ref('');
 const requestErrorMessage = ref('');
 
-const form = useHttp<SubscriberForm>(
-    'post',
-    SubscriberController.url(),
-    {
-        email: '',
-        status: 'subscribed',
-    },
-);
+const form = useHttp<SubscriberForm>('post', SubscriberController.url(), {
+    email: '',
+    status: 'subscribed',
+});
 
 const errors = computed(() => form.errors);
 const processing = computed(() => form.processing);
@@ -114,7 +110,7 @@ defineOptions({
                         id="status"
                         v-model="form.status"
                         name="status"
-                        class="border-input bg-background ring-offset-background focus-visible:ring-ring flex h-9 w-full rounded-md border px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30 dark:aria-invalid:ring-destructive/40"
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs ring-offset-background transition-[color,box-shadow] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30 dark:aria-invalid:ring-destructive/40"
                         :tabindex="2"
                         :disabled="processing"
                         :aria-invalid="Boolean(errors.status)"

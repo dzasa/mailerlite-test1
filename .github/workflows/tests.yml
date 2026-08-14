@@ -9,9 +9,47 @@ on:
 permissions:
   contents: read
 
+# .env.example points at the Docker Compose service names (mysql, redis) because
+# that is how the app runs locally. On Actions the equivalents are service
+# containers published on localhost, and these job-level variables win: Laravel
+# loads .env immutably, so real environment variables are not overwritten.
+env:
+  DB_CONNECTION: mysql
+  DB_HOST: 127.0.0.1
+  DB_PORT: 3306
+  DB_DATABASE: laravel
+  DB_USERNAME: root
+  DB_PASSWORD: password
+  REDIS_HOST: 127.0.0.1
+  REDIS_PORT: 6379
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: laravel
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -ppassword"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
 
     steps:
       - name: Checkout code
@@ -23,6 +61,9 @@ jobs:
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: '8.5'
+          # redis is not bundled by setup-php, and the app's cache, queue and
+          # claim-registry connections all reference it.
+          extensions: redis, pdo_mysql
           tools: composer:v2
           coverage: none
 
@@ -31,8 +72,19 @@ jobs:
         with:
           node-version: '22'
 
+      # phpunit.xml runs tests against DB_DATABASE=testing. Sail creates that
+      # database from an init script; the service container only creates the one
+      # named in MYSQL_DATABASE, so add it here.
+      - name: Create the testing database
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -ppassword -e 'CREATE DATABASE IF NOT EXISTS testing;'
+
       - name: Setup Application
         run: composer setup
+
+      # composer setup builds assets, so the browser suite will run rather than
+      # skip. It needs a real browser.
+      - name: Install Chromium for browser tests
+        run: npx playwright install --with-deps chromium
 
       - name: Run CI Checks
         run: composer ci:check
